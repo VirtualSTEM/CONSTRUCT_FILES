@@ -1,499 +1,500 @@
-// Difficulty parameters
-const PLAYER_DELAY = 0.3; // Time taken by the player to change tables
-const FOOD_DELAY = 1; // Time taken by the food to move through the table
-const WAITER_DELAY = 6; // Time taken by the waiter to move through the table
-const WAITER_SPAWN_START = 5; // Maximum time required to spawn a waiter
-const WAITER_SPAWN_REDUCE = 0.2; // Time reduction to spawn the next waiter
-const WAITER_SPAWN_END = 1.4; // Minimum time required to spawn a waiter
-const PLATE_DELAY = 4; // Time taken by empty plate to move through the table
-const PLATE_SPAWN_CHANCE = 0.25; // How likely an empty plate is to spawn
-const MIN_WAITERS_FOR_PLATE_SPAWN = 4; // Min amount of people to spawn plate
-const STARTING_SPARE_PLATES = 2; // With how many spare plates the player starts
-const STARTING_POS_INDEX = 2; // Player's starting position index
-const WAITING_TIME = 500; // Waiting time before the inputs are enabled
+/*
+ * Made by Viridino Studios (@ViridinoStudios)
+ *
+ * Felipe Vaiano Calderan - Programmer
+ * Twitter: @fvcalderan
+ * E-mail: fvcalderan@gmail.com
+ *
+ * Wesley Andrade - Artist
+ * Twitter: @andrart7
+ * E-mail: wesleymatos1989@gmail.com
+ *
+ * Made with the support of patrons on https://www.patreon.com/viridinostudios
+ */
+ 
+//=============================================================================
 
 // Settings
-const MAX_THROWING_FRAME = 3; // Maximum frame number for throwing animation
-const MAX_WAITERS_ANIMATION_NUMBER = 2; // Maximum number of people animations
-const MAX_FOOD_FRAME = 4; // Maximum frame number for the plate
-
-// Gameplay variables
-let playerPositionsIndex = STARTING_POS_INDEX; // Current player position index
-let playerMoving = false; // Is the player making a move right now?
-let currentWaiterSpawnTime = WAITER_SPAWN_START; // Time taken to spawn a waiter
-let numberOfWaitersSpawned = 0; // Number of people spawned
-let score = 0; // Player's score
-let sparePlates = STARTING_SPARE_PLATES; // Player's spare plates
-let controlsEnabled = false; // Player can input
-let bonusSpawned = false;
+const STARTSPEED = 1; // Starting game speed
+const PLAYERTURNSPEED = 1.5; // How fast the player can turn
+const PLAYERACCELMULT = 2; // Speed multiplier when the player accels
+const PLAYERBRAKEMULT = 0.5; // Speed multiplier when the player brakes
+const MAPSIZE = 2400; // Size of full map (to calculate the loop)
+const THREATWORTH = 50; // How many points a threat kill is worth
+const MAXFUEL = 99; // Maximum amount of fuel
 
 /* These variables store object instances that are referenced later.
- * Their names reflect which objects they will later be assigned to
- */
-let keyboard;
+ * Their names reflect which objects they will later be assigned to */
 let player;
-let timer;
-let statsText;
+let playerAfterburner;
+let startPosition;
+let terrain;
+let loopIn;
 let gameOverText;
-let gameOverMask;
-let playerMovementTween;
+let infoText;
+let tutorialText;
+let background;
+let water;
+let keyboard;
 
-// The game has multiple positions for players, food, and waiters.
-// These variables will hold arrays for each.
-let playerPositions;
-let foodPositions;
-let waiterPositions;
+// IObjectClass references (not instances)
+let playerBullet;
+let threats;
+let explosion;
 
-/**
-This function runs when the game is loading.
-*/
+// Gameplay variables
+let mapSpeed; // How fast the player is moving WITHOUT thrust/brake
+let playerSpeed; // How fast the player is moving WITH thrust/brake
+let playerDying; // Is the player dying?
+let cooldown; // Time before the player can shoot again
+let iteration; // Current gameplay loop iteration
+let fuel; // Current fuel amount
+let score; // Player's score
+
+// Check if the player has just opened the game (to show the tutorial)
+let tutorialIsOn = true;
+
 runOnStartup(async runtime => {
-
+    // Code to run on the loading screen.
+    
     runtime.addEventListener(
         "beforeprojectstart", () => onBeforeProjectStart(runtime)
     );
 });
 
-
-/**
-This function runs before the first layout is created
-*/
 async function onBeforeProjectStart(runtime) {
-
-    // Get important instances and behaviors
-    keyboard = runtime.keyboard;
+    // Code to run just before 'On start of layout'
+    
+    // Assign instances
     player = runtime.objects.Player.getFirstInstance();
-    timer = runtime.objects.TimerManager.getFirstInstance().behaviors.Timer;
-    statsText = runtime.objects.ScoreText.getFirstInstance();
+    playerAfterburner = runtime.objects.PlayerAfterburner.getFirstInstance();
+    startPosition = runtime.objects.StartPosition.getFirstInstance();
+    terrain = runtime.objects.Terrain.getFirstInstance();
+    loopIn = runtime.objects.LoopIn.getFirstInstance();
     gameOverText = runtime.objects.GameOverText.getFirstInstance();
-    gameOverMask = runtime.objects.gameOverMask.getFirstInstance();
+    infoText = runtime.objects.InfoText.getFirstInstance();
+    tutorialText = runtime.objects.TutorialText.getFirstInstance();
+    background = runtime.objects.Background.getFirstInstance();
+    water = runtime.objects.Water.getFirstInstance();
+    keyboard = runtime.keyboard;
+    
+    //Assign IObjectClass references
+    playerBullet = runtime.objects.PlayerBullet;
+    threats = runtime.objects.Threats;
+    explosion = runtime.objects.Explosion;
+    
+    // Wait for keypress to start the game
+    runtime.addEventListener("keydown", e => startGame(e, runtime));
+}
 
-    // Get important lists of instances
-    playerPositions = runtime.objects.PositionPlayer.getAllInstances();
-    foodPositions = runtime.objects.PositionFood.getAllInstances();
-    waiterPositions = runtime.objects.PositionPerson.getAllInstances();
-
-    // Start waiter-spawn timer
-    timer.addEventListener("timer", e => onTimer(e, runtime));
-    timer.startTimer(currentWaiterSpawnTime, "characterspawn", "once");
-
-    // Wait a little before the player can input
-    setTimeout(() => controlsEnabled = true, WAITING_TIME);
-
-    // Start ticking
+function startGame(e, runtime) {
+    // Hide tutorial and start the game
+    
+    if (!tutorialIsOn || e.key != " ") return;
+    tutorialIsOn = false; // Deactivate the tutorial
+    
+    // Hide tutorial text and show the information text
+    tutorialText.behaviors.Fade.fadeInTime = 0;
+    tutorialText.behaviors.Fade.fadeOutTime = 1;
+    tutorialText.behaviors.Fade.startFade();
+    infoText.isVisible = true;
+    
+    // Reset game and Start ticking
+    resetGame(runtime);
     runtime.addEventListener("tick", () => onTick(runtime));
 }
 
-
-/**
-This function runs on every tick.
-*/
-function onTick(runtime) {
-    // Functions called on every tick
-    getPlayerInputs(runtime);
-    resetPlayerAnimAndSpawnPlate(runtime);
-    makeWaiterGoAway(runtime);
-    checkWaiterAndFoodCollision(runtime);
-    breakFoodPlates(runtime);
-    spawnBonus(runtime);
-    breakBonuses(runtime);
-}
-
-
-/**
-This function runs every time the timer elapses.
-*/
-function onTimer(e, runtime) {
-
-    // Time to spawn a character
-    if (e.tag == "characterspawn") {
-        // Create a waiter at a random table
-        const positionIndex = Math.floor(Math.random() * 4);
-        const waiter = runtime.objects.Waiter.createInstance(
-            "Game",
-            waiterPositions[positionIndex].x + 1,
-            waiterPositions[positionIndex].y
-        );
-        waiter.setAnimation("Person_" + Math.floor(
-            Math.random() * MAX_WAITERS_ANIMATION_NUMBER
-        ));
-        waiter.instVars.lane = positionIndex;
-        // Start movement Tween
-        waiter.behaviors.Tween.startTween(
-            "position",
-            [waiterPositions[positionIndex].instVars.maxX, waiter.y],
-            WAITER_DELAY,
-            "linear"
-        );
-        // Reduce spawn time and reset timer
-        if (currentWaiterSpawnTime - WAITER_SPAWN_REDUCE >= WAITER_SPAWN_END) {
-            currentWaiterSpawnTime -= WAITER_SPAWN_REDUCE;
-        }
-        timer.startTimer(currentWaiterSpawnTime, "characterspawn", "once");
-        // Increase number of people spawned
-        numberOfWaitersSpawned += 1;
-
-        // Should an empty plate be spawned?
-        if (
-            Math.random() < PLATE_SPAWN_CHANCE &&
-            numberOfWaitersSpawned > MIN_WAITERS_FOR_PLATE_SPAWN
-        ) {
-            // Create the plate
-            const plate = runtime.objects.Pizza.createInstance(
-                "Game",
-                foodPositions[positionIndex].instVars.minX + 1,
-                foodPositions[positionIndex].y
-            );
-            // Set the animation to the empty version
-            plate.setAnimation("Empty");
-            // Start movement Tween
-            plate.behaviors.Tween.startTween(
-                "position",
-                [foodPositions[positionIndex].x, plate.y],
-                PLATE_DELAY,
-                "linear"
-            );
+function spawnEntities(runtime) {
+    // Create enemies on spawners
+    
+    // First, destroy any enemy/fuel tank that is already on the map
+    for (const t of threats.getAllInstances()) {
+        t.destroy();
+        for (const c of t.children()) c.destroy(); // destroy children
+    }
+    
+    for (const f of runtime.objects.FuelTank.getAllInstances())
+        f.destroy();
+        
+    for (const spawn of runtime.objects.EnemySpawn.getAllInstances()) {
+        // Check if enemy should spawn from now on. If not, ignore.
+        if (+spawn.animationName > iteration) continue;
+    
+        switch (spawn.instVars.enemyType) {
+            case "Helicopter": spawnHelicopter(spawn, runtime); break;
+            case "Ship": spawnShip(spawn, runtime); break;
+            case "Jet": spawnJet(spawn, runtime); break;
+            case "Bridge": spawnBridge(spawn, runtime); break;
+            case "FuelTank": spawnFuelTank(spawn, runtime); break;
         }
     }
 }
 
-
-/**
-This function runs on every tick.  
-Checks for the user's key presses, and executes the proper action.
-*/
-function getPlayerInputs(runtime) {
-
-    // If the user presses "R" and the game is over, reset the game.
-    if (keyboard.isKeyDown("KeyR") && gameOverText.isVisible) {
-        resetGame(runtime);
-    }
-
-    // controlsEnabled is a boolean (true or false) value.  If controlsEnabled is false,
-    // return from this function without doing anything further.
-    if (!controlsEnabled) return;
-
-    // The player cannot change input while a movement is happening
-    // If movementStopped & throwingStopped variables are both true, playerMoving = false.
-    if (!playerMoving) {
-        // Player moves down
-        if (keyboard.isKeyDown("ArrowDown") && playerPositionsIndex < 3) {
-            playerPositionsIndex += 1;
-            moveThePlayer("RunningDown");
-            playerMoving = true;
-
-            // Player moves up
-        } else if (keyboard.isKeyDown("ArrowUp") && playerPositionsIndex > 0) {
-            playerPositionsIndex -= 1;
-            moveThePlayer("RunningUp");
-            playerMoving = true;
-
-            // Player throws food
-        } else if (keyboard.isKeyDown("Space")) {
-            player.setAnimation("Throwing");
-            playerMoving = true;
-        }
-    }
-}
-
-
-/**
-This function runs on every tick.  
-Check if the player stopped moving, if so, reset player movement
-**/
-function resetPlayerAnimAndSpawnPlate(runtime) {
-
-    // If playerMovementTween is not null, the player is moving up or down.
-    // playerMovementTween.isReleased is true if the tween has completed.
-    const movementStopped = playerMovementTween &&
-        playerMovementTween.isReleased;
-
-    // throwingStopped  = true when the player's animation is "Throwing" and the
-    // "Throwing" animation is at its last frame.
-    const throwingStopped = player.animationName == "Throwing" &&
-        player.animationFrame == MAX_THROWING_FRAME;
-
-    // Reset player movement, if any of the above 2 has stopped
-    if (movementStopped || throwingStopped) {
-        playerMoving = false;
-        playerMovementTween = null;
-        player.setAnimation("Idle");
-    }
-
-    // After the Player's throwing animation stops, Spawn the Pizza sprite.
-    if (throwingStopped) {
-        const food = runtime.objects.Pizza.createInstance(
-            "Game",
-            foodPositions[playerPositionsIndex].x - 1,
-            foodPositions[playerPositionsIndex].y
-        );
-        food.animationFrame = Math.floor(Math.random() * (MAX_FOOD_FRAME + 1));
-        food.behaviors.Tween.startTween(
-            "position",
-            [foodPositions[playerPositionsIndex].instVars.minX, food.y],
-            FOOD_DELAY,
-            "linear"
-        )
-    }
-}
-
-
-/**
-This function runs on every tick.  
-It checks if a Waiter is at the leftmost X value (destroy) or rightmost X value (game over).
-*/
-function makeWaiterGoAway(runtime) {
-    // Get all Waiter instances
-    const waiters = runtime.objects.Waiter.getAllInstances();
-
-    // Create arrays for leftmost and rightmost X values
-    const leftmostXValues = [...Array(4).keys()].map(i => waiterPositions[i].x);
-    const rightmostXValues = [...Array(4).keys()].map(i => waiterPositions[i].instVars.maxX);
-
-    // If any waiter has reached a possible ending position, execute an action
-    for (const waiter of waiters) {
-        // Destroy waiter when waiter reaches leftmost X value
-        if (leftmostXValues.includes(waiter.x)) {
-            waiter.destroy();
-            // End game when waiter reaches rightmost X value
-        } else if (rightmostXValues.includes(waiter.x)) {
-            gameOver(runtime); // Customer lost -> Game over!
-        }
-    }
-}
-
-
-/**
-This function runs on every tick.  
-If Full Pizza plate touches Waiter, send waiter back left holding food.
-*/
-function checkWaiterAndFoodCollision(runtime) {
-    // Check if a waiter got a full food plate
-
-    // Get all current Waiters and foods
-    const waiters = runtime.objects.Waiter.getAllInstances();
-    const foods = runtime.objects.Pizza.getAllInstances();
-
-    // Get all people
-    for (const waiter of waiters) {
-        // Get all full food plates
-        for (const food of foods) {
-            // Check if a full plate is overlapping a waiter
-            if (waiter.testOverlap(food) && food.animationName == "Full") {
-                // Stop all current Tweens
-                for (const tween of waiter.behaviors.Tween.allTweens()) {
-                    tween.stop();
-                }
-                // Start a new tween to go back to the left
-                waiter.behaviors.Tween.startTween(
-                    "position",
-                    [waiterPositions[waiter.instVars.lane].x, waiter.y],
-                    Math.abs(waiter.x - waiterPositions[waiter.instVars.lane].x) / 64,
-                    "linear"
-                );
-                try {
-                    waiter.setAnimation(waiter.animationName + "_Hold");
-                    food.destroy();
-                    score += 1;
-                    updateStats();
-
-                } catch (_) {
-                    // Person already going away, so ignore it
-                }
-            }
-        }
-    }
-}
-
-
-/**
-This function runs on every tick.  
-Breaks food plates when they reach any of the ends of a table
-*/
-function breakFoodPlates(runtime) {
-
-    // Get all Food instances
-    const foods = runtime.objects.Pizza.getAllInstances();
-
-    // Create lists/arrays of possible minimum and maximum food positions
-    const minXValues = [...Array(4).keys()].map(i => foodPositions[i].instVars.minX);
-    const foodXValues = [...Array(4).keys()].map(i => foodPositions[i].x);
-
-    // If any food has reached a possible ending position, break the plate
-    for (const m of foods) {
-        // Leftmost X - Animation is "Full" or "Empty" not "Broken".
-        if (minXValues.includes(m.x) && m.animationName.length < 6) {
-            m.setAnimation("Broken");
-            m.addEventListener("animationend", (e) => onFoodAnimationEnd(e));
-            sparePlates -= 1; // If no spare, then it is game over!
-            if (sparePlates < 0) gameOver(runtime);
-            else updateStats();
-            // Rightmost X and player is not close
-        } else if (foodXValues.includes(m.x) && m.animationName.length < 6) {
-            if (!playerMovementTween && Math.abs(player.y - m.y) < 16) {
-                m.destroy();
-            } else {
-                m.setAnimation("Broken");
-                m.addEventListener(
-                    "animationend", (e) => onFoodAnimationEnd(e)
-                );
-                sparePlates -= 1; // If no spare, then it is game over!
-                if (sparePlates < 0) gameOver(runtime);
-                else updateStats();
-            }
-        }
-    }
-}
-
-
-/**
-This function runs on every tick.
-Checks if the player has a score which is a multiple of 10 (10, 20, 30, etc.).
-If so, spawn a bonus.
-*/
-function spawnBonus(runtime) {
-    if (score > 0 && score % 10 == 0) {
-        // only spawn a bonus if one hasn't already been spawned for this score
-        if (!bonusSpawned) {
-            bonusSpawned = true;
-            const positionIndex = Math.floor(Math.random() * 4);
-            const bonus = runtime.objects.Bonus.createInstance("Game", foodPositions[positionIndex].instVars.minX + 1, foodPositions[positionIndex].y);
-            bonus.behaviors.Tween.startTween(
-                "position",
-                [foodPositions[positionIndex].x, bonus.y],
-                PLATE_DELAY,
-                "linear");
-        }
-        // Score is not a multiple of 10 - bonusSpawned = false
-    } else {
-        bonusSpawned = false;
-    }
-}
-
-
-/**
-This function runs on every tick.  
-Breaks bonuses they reach any of the ends of a table
-*/
-function breakBonuses(runtime) {
-    const bonuses = runtime.objects.Bonus.getAllInstances();
-    const foodXValues = [...Array(4).keys()].map(i => foodPositions[i].x);
-    for (const bonus of bonuses) {
-        if (foodXValues.includes(bonus.x)) {
-            if (!playerMovementTween && Math.abs(player.y - bonus.y) < 16) {
-                bonus.destroy();
-                sparePlates += 1;
-                updateStats();
-            } else {
-                bonus.setAnimation("Broken");
-                bonus.addEventListener(
-                    "animationend", (e) => onFoodAnimationEnd(e)
-                );
-            }
-        }
-    }
-}
-
-
-/**
-Helper function to move the player called from getPlayerInputs().
-*/
-function moveThePlayer(newAnimation) {
-    // Set Tween
-    const newPosition = [
-        playerPositions[playerPositionsIndex].x,
-        playerPositions[playerPositionsIndex].y
-    ];
-    playerMovementTween = player.behaviors.Tween.startTween(
-        "position", newPosition, PLAYER_DELAY, "out-sine"
+function spawnHelicopter(spawn, runtime) {
+    // Create helicopter
+    
+    const v = spawn.instVars;
+    
+    const e = runtime.objects.EnemyHelicopter.createInstance(
+        "Game", spawn.x, spawn.y
     );
-
-    // Set Animation
-    player.setAnimation(newAnimation);
+    
+    e.angle = spawn.angle;
+    
+    // Create rotor
+    const r = runtime.objects.EnemyHelicopterRotor.createInstance(
+        "Game", e.x, e.y
+    );
+    
+    // Make the rotor child of the Helicopter
+    e.addChild(r, {transformX: true, transformY: true});
+    
+    // Activate tween (if necessary)
+    if (v.moveTime > 0) {
+        // Position
+        e.behaviors.Tween.startTween(
+            "position", [v.moveToX, e.y],
+            v.moveTime,
+            "in-out-sine",
+            {pingPong: true, loop: true}
+        );
+        // Angle
+        e.behaviors.Tween.startTween(
+            "angle",
+            v.angleTo,
+            v.moveTime,
+            "in-out-sine",
+            {pingPong: true, loop:true}
+        );
+    }
 }
 
-/**
-Called after animation ends to destroy the food or bonus plate
-*/
-function onFoodAnimationEnd(e) {
-    e.instance.destroy();
+function spawnShip(spawn, runtime) {
+    // Create warship
+    
+    const v = spawn.instVars;
+    
+    const e = runtime.objects.EnemyShip.createInstance(
+        "Game", spawn.x, spawn.y
+    );
+    
+    e.angle = spawn.angle;
+    
+    // Activate tween (if necessary)
+    if (v.moveTime > 0) {
+        e.behaviors.Tween.startTween(
+            "position", [v.moveToX, e.y],
+            v.moveTime,
+            "in-out-sine",
+            {pingPong: true, loop: true}
+        );
+    }
 }
 
-/**
-Called to update the stats on the screen.
-*/
-function updateStats() {
-    statsText.text = "Spare Plates: " + Math.max(sparePlates, 0) + "\nScore: " + score;
+function spawnJet(spawn, runtime) {
+    // Create Jet
+    
+    const e = runtime.objects.EnemyJet.createInstance(
+        "Game", spawn.x, spawn.y
+    );
+    
+    // Move it to the bottom of the map
+    e.behaviors.MoveTo.moveToPosition(e.x, 1.5*MAPSIZE);
+}
+
+function spawnBridge(spawn, runtime) {
+    // Create Bridge
+    
+    const b = runtime.objects.Bridge.createInstance(
+        "Game", spawn.x, spawn.y
+    );
+    
+    // Move bridge to the bottom of the layer
+    b.moveToBottom();
+    
+    // Move ruins to the bottom of the bridges
+    for (const r of runtime.objects.BridgeRuins.getAllInstances())
+        r.moveToBottom();
+        
+    // Move background to the bottom of the ruins
+    background.moveToBottom();
 }
 
 
-/**
-Called when sparePlates < 0 or waiter reaches rightmost value.
-*/
-function gameOver(runtime) {
+function spawnFuelTank(spawn, runtime) {
+    // Create Bridge
 
-    // Disable controls
-    controlsEnabled = false;
-
-    // Get all current waiters and foods
-    const waiters = runtime.objects.Waiter.getAllInstances();
-    const foods = runtime.objects.Pizza.getAllInstances();
-
-    // Stop all Timers
-    timer.stopTimer("characterspawn");
-
-    // Stop all people Tweens
-    for (const waiter of waiters)
-        for (const t of waiter.behaviors.Tween.allTweens())
-            t.stop();
-
-    // Stop all Food Tweens
-    for (const food of foods)
-        for (const t of food.behaviors.Tween.allTweens())
-            t.stop();
-
-    // Show Game Over text and mask
-    gameOverText.isVisible = true;
-    gameOverMask.isVisible = true;
+    const f = runtime.objects.FuelTank.createInstance(
+        "Game", spawn.x, spawn.y
+    );
+    
+    f.angle = spawn.angle;
+    
+    // Move tank to the bottom of the layer, but above the background
+    f.moveToBottom();
+    background.moveToBottom();
 }
 
-/**
-Reset the game when the game is over and the user presses "R".
-*/
 function resetGame(runtime) {
-
-    // Set Game Over text and mask as invisible
-    gameOverText.isVisible = false;
-    gameOverMask.isVisible = false;
-
-    // Get all current waiters and foods
-    const waiters = runtime.objects.Waiter.getAllInstances();
-    const foods = runtime.objects.Pizza.getAllInstances();
-
-    // Delete all people
-    for (const w of waiters)
-        w.destroy();
-
-    // Delete all Foods
-    for (const food of foods)
-        food.destroy();
-
-    // Reset gameplay variables
-    playerPositionsIndex = STARTING_POS_INDEX;
-    playerMoving = false;
-    currentWaiterSpawnTime = WAITER_SPAWN_START;
-    numberOfWaitersSpawned = 0;
+    // Reset game to the starting state
+    
+    // Reset variables
+    mapSpeed = STARTSPEED;
+    playerSpeed = STARTSPEED;
+    playerDying = false;
+    cooldown = 0;
+    iteration = 0;
+    fuel = MAXFUEL;
     score = 0;
-    sparePlates = STARTING_SPARE_PLATES;
-    player.x = playerPositions[playerPositionsIndex].x;
-    player.y = playerPositions[playerPositionsIndex].y;
+    
+    // Reset texts
+    gameOverText.opacity = 0;
+    
+    // Reset the player object and put the camera over it
+    player.isVisible = true;
+    playerAfterburner.isVisible = true;
+    player.x = startPosition.x;
+    player.y = startPosition.y;
+    
+    // Destroy bullets
+    for (const b of playerBullet.getAllInstances())
+        if (player.y - b.y > 180)
+            b.destroy();
+    
+    // Spawn enemies
+    spawnEntities(runtime);
+}
 
-    // Reset statsText
-    updateStats();
+function onTick(runtime)
+{
+    // Code to run every tick
+    moveWater(runtime);
+    consumeFuel(runtime);
+    getInputsAndMove(runtime);
+    reduceCooldown(runtime);
+    destroyFarBullets();
+    checkForLoop(runtime);
+    checkForCollision(runtime);
+    updateInfoText();
+}
 
-    // Start timer
-    timer.startTimer(currentWaiterSpawnTime, "characterspawn", "once");
+function moveWater(runtime) {
+    // Move water to the bottom of the layer and scroll it
+    water.moveToBottom();
+    water.imageOffsetY += 0.1 * 60 * runtime.dt;
+}
 
-    // Wait a little before the player can input
-    setTimeout(() => controlsEnabled = true, WAITING_TIME);
+function consumeFuel(runtime) {
+    // Consume a little fuel every tick
+    
+    // If the player is dying, ignore
+    if (playerDying) return;
+    
+    // Consue fuel. If the player runs out of fuel, it is game over
+    fuel = fuel > 0 ? fuel - 0.05 * 60 * runtime.dt : 0;
+    if (fuel <= 0) gameOver();
+}
+
+function getInputsAndMove(runtime) {
+    // Get player inputs and process them accordingly
+    
+    // Check for game restart
+    if (keyboard.isKeyDown("Space") && gameOverText.opacity == 1)
+        resetGame(runtime);
+    
+    // If the player is dying, ignore.
+    if (playerDying) return;
+    
+    // Fire
+    if (keyboard.isKeyDown("Space") && cooldown <= 0) {
+        const b = playerBullet.createInstance(
+            "Game",
+            player.getImagePointX("FireSpot"),
+            player.getImagePointY("FireSpot"),
+        );
+        b.behaviors.Bullet.speed = 60 * 4 * mapSpeed;
+        cooldown = 25;
+    }
+    
+    // Move and animate the aircraft
+    
+    // Set current animation as idle
+    player.setAnimation("idle");
+    
+    // Move player to the top of the layer
+    player.moveToTop();
+    
+    // Right
+    if (keyboard.isKeyDown("ArrowRight")) {
+        player.x += PLAYERTURNSPEED * 60 * runtime.dt
+        player.setAnimation("right");    
+    }
+        
+    // Left
+    else if (keyboard.isKeyDown("ArrowLeft")) {
+        player.x -= PLAYERTURNSPEED * 60 * runtime.dt
+        player.setAnimation("left");
+    
+    }
+    
+    // Increased speed
+    if (keyboard.isKeyDown("ArrowUp")) {
+        playerSpeed = lerp(
+            playerSpeed, mapSpeed * PLAYERACCELMULT, 0.1 * 60 * runtime.dt
+        );
+        
+    // Decreased speed
+    } else if (keyboard.isKeyDown("ArrowDown")) {
+        playerSpeed = lerp(
+            playerSpeed, mapSpeed * PLAYERBRAKEMULT, 0.1 * 60 * runtime.dt
+        );
+        
+    // Normal speed
+    } else {
+        playerSpeed = lerp(playerSpeed, mapSpeed, 0.1 * 60 * runtime.dt);
+    }
+    
+    // Move the player
+    player.y -= playerSpeed * 60 * runtime.dt;
+}
+
+function reduceCooldown(runtime) {
+    // Reduce player bullet cooldown
+    cooldown = cooldown > 0 ? cooldown - 1 * 60 * runtime.dt : 0;
+}
+
+function destroyFarBullets() {
+    // Bullets outside of player's view should be destroyed
+    for (const b of playerBullet.getAllInstances())
+        if (player.y - b.y > 180) b.destroy();
+}
+
+function checkForLoop(runtime) {
+    // Check if the player has reached the end of the map
+    
+    
+    if (player.testOverlap(loopIn)) {
+        // Send the player and the bullets to the beginning again
+        player.y += MAPSIZE;
+        for (const b of playerBullet.getAllInstances())
+            b.y += MAPSIZE;
+            
+        // Increse iteration, speed and spawn enemies
+        iteration = iteration < 10 ? iteration + 1 : 10;
+        spawnEntities(runtime);
+        mapSpeed = STARTSPEED + 0.1 * iteration;
+    }
+}
+
+function checkForCollision(runtime) {
+    // Check objects collision
+
+    // Check if the player has collided with the terrain
+    if (player.testOverlap(terrain) && !playerDying) gameOver();
+    
+    // Check if the player has collided with a threat
+    for (const t of threats.getAllInstances()) {
+        if (player.testOverlap(t) && !playerDying) {
+            // Destroy threat
+            t.destroy();
+            const ex = explosion.createInstance("Game", t.x, t.y);
+            ex.addEventListener(
+                "animationend", (e) => e.instance.destroy()
+            );
+
+            for (const c of t.children()) c.destroy(); // Destroy children
+            
+            gameOver(); // Game over
+        }
+    }
+    
+    // Check if the player has collided with bridge ruins
+    for (const t of runtime.objects.BridgeRuins.getAllInstances())
+        if (player.testOverlap(t) && !playerDying)
+            gameOver();
+    
+    // Check if the player has collided with a fuel tank
+    for (const t of runtime.objects.FuelTank.getAllInstances())
+        if (player.testOverlap(t) && !playerDying)
+            fuel = fuel < MAXFUEL ? fuel + 0.25 * 60 * runtime.dt : MAXFUEL;
+
+    // Check if a bullet has collided with something
+    for (const b of playerBullet.getAllInstances()) {
+        // Terrain
+        if (b.testOverlap(terrain)) {
+            const pbe_proto = runtime.objects.PlayerBulletExplosion;
+            const pbe = pbe_proto.createInstance("Game", b.x, b.y);
+            pbe.addEventListener("animationend", (e) => e.instance.destroy());
+            b.destroy();
+        }
+        
+        // Fuel tank (destroy it)
+        for (const f of runtime.objects.FuelTank.getAllInstances()) {
+            if (b.testOverlap(f)) {
+                const pbe_proto = runtime.objects.PlayerBulletExplosion;
+                const pbe = pbe_proto.createInstance("Game", b.x, b.y);
+                pbe.addEventListener(
+                    "animationend", (e) => e.instance.destroy()
+                );
+                b.destroy();
+                f.destroy();
+                const ex = explosion.createInstance("Game", f.x, f.y);
+                ex.addEventListener(
+                    "animationend", (e) => e.instance.destroy()
+                );
+            }
+        }
+        
+        // Threat (destroy it)
+        for (const t of threats.getAllInstances()) {
+            if (b.testOverlap(t)) {
+                const pbe_proto = runtime.objects.PlayerBulletExplosion;
+                const pbe = pbe_proto.createInstance("Game", b.x, b.y);
+                pbe.addEventListener(
+                    "animationend", (e) => e.instance.destroy()
+                );
+                b.destroy();
+                t.destroy();
+                const ex = explosion.createInstance("Game", t.x, t.y);
+                ex.addEventListener(
+                    "animationend", (e) => e.instance.destroy()
+                );
+                for (const c of t.children())
+                    c.destroy(); // Destroy threat's children
+                score += THREATWORTH * (1 + iteration/5);
+            }
+        }
+    }
+}
+
+function updateInfoText() {
+    // Update information textbox
+    
+    // Format the score and amount of fuel. Write them to infoText
+    const txtScore = score.toFixed(0);
+    const txtFuel = fuel.toFixed(0).padStart(2, '0');
+    infoText.text = "Score: " + txtScore + "\nFuel: " + txtFuel;
+}
+
+function gameOver() {
+    // Game Over procedure
+
+    // Stop progressing the game
+    mapSpeed = 0;
+    playerSpeed = 0;
+    playerDying = true;
+    const ex = explosion.createInstance("Game", player.x, player.y);
+    ex.addEventListener("animationend", (e) => e.instance.destroy());
+    player.isVisible = false;
+    playerAfterburner.isVisible = false;
+
+    // Show game over text
+    gameOverText.behaviors.Fade.fadeInTime = 1;
+    gameOverText.behaviors.Fade.fadeOutTime = 0;
+    gameOverText.behaviors.Fade.startFade();
+}
+
+function lerp(start, end, amt) {
+    // Simple helper function for linear interpolation
+    return (1 - amt) * start + amt * end;
 }
