@@ -65,7 +65,6 @@ function tick(runtime) {
 function fireBullet(runtime) {
     // Fire
     if (keyboard.isKeyDown("KeyF") && cooldown <= 0) {
-        playerBox.spa
         const bullet = runtime.objects.Bullet.createInstance(
             "GameLayer",
             playerBox.x,
@@ -81,7 +80,8 @@ function fireBullet(runtime) {
 }
 
 function reduceCooldown(runtime) {
-    // Reduce player bullet cooldown
+    // runtime.dt is the time of a tick - roughly 0.0167 or 1/60 seconds
+    // cooldown goes from 25 to 0 in approximately 25 ticks
     cooldown = cooldown > 0 ? (cooldown - 1) * 60 * runtime.dt : 0;
 }
 
